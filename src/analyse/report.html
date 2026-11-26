@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>策略稳健性检验</title><style>
+:root{color-scheme:light;--ink:#182e34;--muted:#4c6569;--line:#c6d5d1;--teal:#196a66;--orange:#a54822;--bg:#f4f6f2}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 "Inter","PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1080px;margin:auto;padding:32px 26px 70px}
+header{display:flex;justify-content:space-between;gap:25px;align-items:flex-end;padding:24px 0 28px;border-top:4px solid var(--teal)}h1{font:600 clamp(28px,4vw,45px)/1.2 "Songti SC","STSong",serif;letter-spacing:-1px;margin:0 0 10px}h2{font-size:23px;margin:0}h3{font-size:16px;margin:8px 0}p{color:var(--muted);margin:7px 0 12px}.meta{overflow-wrap:anywhere}
+.kpis{display:flex;flex-wrap:wrap;gap:24px}.kpis div{border-left:2px solid var(--line);padding-left:13px}.kpis span{display:block;color:var(--muted);font-size:13px}.kpis strong{font-size:21px;font-variant-numeric:tabular-nums}
+section{padding:24px clamp(14px,3vw,30px);margin-bottom:18px;border:1px solid var(--line);border-radius:9px;background:#fff}
+.heading,.controls,footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+fieldset{border:0;padding:0;margin:0;display:flex}button{font:inherit;font-size:14px;cursor:pointer;border:1px solid #afc4bd;background:#fff;color:var(--ink);padding:5px 12px;border-radius:5px}button[aria-pressed=true]{background:var(--teal);color:white;border-color:var(--teal)}fieldset button+button{margin-left:4px}button:disabled{opacity:.4;cursor:default}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #c85b23;outline-offset:2px}
+.plot{background:#f6f9f6;border-radius:6px;padding:16px 14px 12px;margin:16px 0 8px}
+.hist{height:155px;position:relative;display:flex;align-items:flex-end;gap:1px;border-bottom:1px solid #738e87;background:repeating-linear-gradient(0deg,transparent 0,transparent 49px,#dae4de 50px)}
+.hist button{flex:1;padding:0;border:0;border-radius:2px 2px 0 0;background:#44887b;z-index:1;min-width:0}.hist button:hover,.hist button:focus{background:#164e48}
+.marker{position:absolute;top:0;bottom:0;border-left:2px dashed;pointer-events:none;z-index:2}.axis,.legend,.hint{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.legend{justify-content:flex-start;flex-wrap:wrap;padding:7px 0}.legend span{border-left:3px solid;padding-left:6px}
+.hint{display:block;min-height:21px;color:var(--teal)}.strip{display:grid;grid-template-columns:48px 1fr minmax(82px,auto);gap:10px;align-items:center;width:100%;padding:4px 0;background:transparent;border:0;text-align:left;font-variant-numeric:tabular-nums}.track{height:16px;position:relative;background:#e8efea}.bar,.zero{position:absolute;top:0;height:100%}.bar{background:var(--teal)}.bar.negative{background:var(--orange)}.zero{width:1px;background:#627a76}.strip:hover .track,.strip:focus .track{outline:1px solid var(--teal)}.strip b{text-align:right;font-weight:500}.nowrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums;text-align:left}td,th{border-bottom:1px solid #dce5df;padding:8px;white-space:nowrap}th{background:#f1f5f1;color:#425d59;font-weight:550}tbody tr:hover{background:#f7f9f6}
+details{margin-top:16px}summary{cursor:pointer;font-weight:600;color:var(--teal)}.controls{justify-content:flex-end;margin:8px 0}.notice{border-left:3px solid var(--orange);padding-left:10px}.links a{margin:0 8px;color:var(--teal)}footer{font-size:13px;color:var(--muted)}
+@media(max-width:760px){main{padding:18px 10px 40px}header{display:block}.kpis{margin-top:15px}.heading{align-items:flex-start}.strip{gap:6px}.axis,.legend,.hint{font-size:12px}}
+</style></head><body><main><header><div><h1>策略稳健性检验</h1><p id="meta" class="meta"></p></div><div class="kpis" id="kpis"></div></header>
+<p id="execution" class="notice"></p><div id="sections"></div><footer><span id="stamp"></span><div class="links"><a href="details.csv">逐次明细 CSV</a><a href="summary.csv">统计汇总 CSV</a><a href="manifest.json">运行参数</a></div></footer></main>
+<script type="application/json" id="analysis-data">/*ANALYSIS_DATA*/</script><script>
+"use strict";
+const data = JSON.parse(document.querySelector("#analysis-data").textContent);
+const manifest = data.manifest;
+const names = {sharpe:"年化夏普",total_return:"累计收益率"};
+const reasons = {ZERO_VARIANCE:"日收益零波动",MISSING_INPUT:"指标输入缺失",INSUFFICIENT_SAMPLE:"样本不足"};
+const date = s => s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8);
+function element(tag, parent, content, cls) {
+  const el = document.createElement(tag);
+  if (content !== undefined) el.textContent = content;
+  if (cls) el.className = cls;
+  if (parent) parent.append(el);
+  return el;
+}
+function format(metric, v, sd=false) {
+  if (v == null) return "—";
+  const percent = metric === "total_return";
+  const x = percent ? v*100 : v;
+  const number = x !== 0 && Math.abs(x)<1e-6 ? x.toExponential(3) :
+    x.toLocaleString("zh-CN",{maximumFractionDigits:percent?5:8});
+  return number+(percent?(sd?" 个百分点":"%"):"");
+}
+function table(parent, headers, rows) {
+  const t=element("table",element("div",parent,undefined,"nowrap"));
+  const head=element("tr",element("thead",t));
+  headers.forEach(h=>element("th",head,h).scope="col");
+  const body=element("tbody",t);
+  for (const row of rows) {
+    const tr=element("tr",body);
+    row.forEach(value=>element("td",tr,value??"—"));
+  }
+}
+function inspect(button,hint,text) {
+  button.type="button"; button.title=text; button.setAttribute("aria-label",text);
+  for (const event of ["focus","pointerenter","click"]) button.addEventListener(event,()=>hint.textContent=text);
+}
+function histogram(parent,rows,s,hint) {
+  const k=s.metric, values=rows.filter(r=>r.status==="ok" && r[k]!=null).map(r=>r[k]);
+  if (!values.length) {element("p",parent,"无有效模拟值");return}
+  const markers=[["真实值",s.actual,"#9d421a"],["E + 2σ",s.upper2,"#445dab"],["E + 3σ",s.upper3,"#833975"]].filter(m=>m[1]!=null);
+  let lo=Math.min(...markers.map(m=>m[1])), hi=Math.max(...markers.map(m=>m[1]));
+  for (const v of values) {lo=Math.min(lo,v);hi=Math.max(hi,v)}
+  const flat=lo===hi, bins=flat?[values.length]:Array(25).fill(0);
+  if (!flat) for (const v of values) bins[Math.min(bins.length-1,Math.floor((v-lo)/(hi-lo)*bins.length))]++;
+  const max=Math.max(...bins);
+  element("div",parent,"纵轴 · 轮数（最高 "+max+"）","axis");
+  const plot=element("div",parent,undefined,"hist"); plot.setAttribute("aria-label","置换指标频数直方图");
+  bins.forEach((count,i)=>{
+    const b=element("button",plot); b.style.height=(100*count/max)+"%";
+    if (flat) {b.style.flex="0 0 8%";b.style.margin="0 auto"}
+    const left=lo+(hi-lo)*i/bins.length,right=lo+(hi-lo)*(i+1)/bins.length;
+    inspect(b,hint,(flat?format(k,lo):format(k,left)+" 至 "+format(k,right))+" · "+count+" 轮");
+  });
+  markers.forEach(([,v,color])=>{
+    const line=element("span",plot,undefined,"marker");
+    line.style.left=(flat?50:100*(v-lo)/(hi-lo))+"%";line.style.borderColor=color;
+  });
+  const axis=element("div",parent,undefined,"axis");
+  element("span",axis,format(k,lo));element("span",axis,flat?"全部模拟值重合":names[k]);element("span",axis,format(k,hi));
+  const legend=element("div",parent,undefined,"legend");
+  markers.forEach(([name,v,color])=>element("span",legend,name+" "+format(k,v)).style.borderColor=color);
+}
+function segmentChart(parent,rows,s,hint) {
+  const k=s.metric, values=rows.filter(r=>r[k]!=null).map(r=>r[k]);
+  const lo=Math.min(0,...values),hi=Math.max(0,...values),range=(hi-lo)||1,zero=-lo/range*100;
+  for (const r of rows) {
+    const x=r[k], b=element("button",parent,undefined,"strip");
+    element("span",b,"第 "+r.index+" 段");const track=element("span",b,undefined,"track");
+    element("span",track,undefined,"zero").style.left=zero+"%";
+    if(x!=null) {
+      const bar=element("span",track,undefined,"bar"+(x<0?" negative":""));
+      bar.style.left=(Math.min(x,0)-lo)/range*100+"%";bar.style.width=Math.abs(x)/range*100+"%";
+    }
+    element("b",b,format(k,x));inspect(b,hint,date(r.start)+" 至 "+date(r.end)+" · "+r.days+" 个交易日 · "+(r.fills??"—")+" 笔成交 · "+names[k]+" "+format(k,x));
+  }
+}
+function detail(parent,method,rows) {
+  const perm=method==="permute",d=element("details",parent);
+  element("summary",d,(perm?"置换明细":"分段明细")+"（"+rows.length+"）");
+  const controls=element("div",d,undefined,"controls");
+  const prev=element("button",controls,"上一页"), pageText=element("span",controls), next=element("button",controls,"下一页");
+  controls.hidden=rows.length<=20;
+  if (controls.hidden) controls.style.display="none";
+  const wrap=element("div",d);let page=0;
+  function draw(){
+    wrap.replaceChildren();
+    const pages=Math.max(1,Math.ceil(rows.length/20));
+    pageText.textContent=(page+1)+" / "+pages; prev.disabled=!page;next.disabled=page+1>=pages;
+    const headers=[perm?"轮次":"分段",...(perm?[]:["起止日期","交易日","成交笔数"]),"年化夏普","累计收益率","状态 / 原因"];
+    table(wrap,headers,rows.slice(page*20,page*20+20).map(r=>{
+      const messages=[r.error,r.sharpe_reason,r.total_return_reason].filter(Boolean).map(x=>reasons[x]??x);
+      return [r.index,...(perm?[]:[date(r.start)+" – "+date(r.end),r.days,r.fills]),format("sharpe",r.sharpe),format("total_return",r.total_return),messages.join(" · ")||"完成"];
+    }));
+  }
+  prev.onclick=()=>{page--;draw()};next.onclick=()=>{page++;draw()};draw();
+}
+function section(method) {
+  const perm=method==="permute",rows=data.results[method],section=element("section",document.querySelector("#sections"));
+  const head=element("div",section,undefined,"heading");
+  element("h2",head,perm?"持仓内涨跌幅置换":"十段独立回测");
+  if (!rows) {element("p",section,manifest.errors[method],"notice");return}
+  const tabs=element("fieldset",head);tabs.setAttribute("aria-label","图表指标");
+  const info=manifest.permutation;
+  element("p",section,perm?
+    info.n+" 轮，种子 "+info.seed+"。原顺序已核对 "+info.audited_days+" 天，"+info.holding_periods+" 个持仓区间中有 "+info.shuffled_periods+" 个可置换，共 "+info.shuffled_days+" 个持有日。":
+    "每段以 "+Number(manifest.config.initial_cash).toLocaleString("zh-CN")+" 元空仓启动。区间按交易日划分，分别执行完整策略。");
+  const plot=element("div",section,undefined,"plot"),hint=element("div",section,undefined,"hint");
+  hint.setAttribute("aria-live","polite");
+  const buttons={};
+  function draw(metric) {
+    plot.replaceChildren();
+    for (const [key,b] of Object.entries(buttons)) b.setAttribute("aria-pressed",key===metric);
+    hint.textContent=perm?"选择柱形查看该范围的轮数。":"选择区间查看日期、成交笔数和指标值。";
+    const s=data.summaries[method].find(s=>s.metric===metric);
+    (perm?histogram:segmentChart)(plot,rows,s,hint);
+  }
+  for (const [key,label] of Object.entries(names)) {
+    buttons[key]=element("button",tabs,label);buttons[key].onclick=()=>draw(key);
+  }
+  draw("sharpe");
+  const summary=data.summaries[method],flag=v=>v==null?"—":v?"超过":"未超过";
+  table(section,["指标","有效 / 总数","均值 E","样本标准差 σ",...(perm?["真实值","E + 2σ","2σ 判断","E + 3σ","3σ 判断"]:[])],summary.map(s=>
+    [names[s.metric],s.valid+" / "+s.requested,format(s.metric,s.mean),format(s.metric,s.sd,true),...(perm?[format(s.metric,s.actual),format(s.metric,s.upper2),flag(s.above2),format(s.metric,s.upper3),flag(s.above3)]:[])]));
+  if(perm) {
+    for (const s of summary) {
+      const text=s.reason?s.reason+"，越界不可判定。":"模拟中有 "+s.at_or_above+" 个有效值达到或高于真实值。";
+      element("p",section,names[s.metric]+" · "+text);
+    }
+    element("p",section,"置换以真实选股和成交安排为条件。阈值描述模拟分布的上尾；固定股数持有期间，调换涨跌顺序可产生相同的期末收益。");
+  } else {
+    element("p",section,"各段等权统计。分段均值描述历史区间的差异，不能替代样本外验证。");
+  }
+  detail(section,method,rows);
+}
+document.querySelector("#execution").textContent="成交假设 · 本项目引擎按开盘或收盘报价撮合，交易费用为零，成交股数受现金与持仓约束，未设置成交量上限。";
+document.querySelector("#meta").textContent=manifest.strategy+" · "+date(manifest.start)+" 至 "+date(manifest.end)+" · "+manifest.days+" 个交易日";
+for (const [key,label] of Object.entries(names)){
+  const box=element("div",document.querySelector("#kpis"));element("span",box,"全期"+label);element("strong",box,format(key,data.actual[key]));
+}
+for(const method of ["permute","segments"]) if(data.results[method]||method in manifest.errors) section(method);
+document.querySelector("#stamp").textContent="情境 "+manifest.scenario.name+" · 运行 "+manifest.run_id;
+</script></body></html>

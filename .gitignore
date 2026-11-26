@@ -1,0 +1,48 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.eggs/
+
+# Tool caches and test output
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv
+.venv-*/
+venv/
+
+# Local credentials (configure separately on each computer)
+.tushare_token
+.env
+.env.*
+!.env.example
+
+# Downloaded datasets; keep the update script in version control
+data/*
+!data/daily_data/
+data/daily_data/*
+!data/daily_data/update.py
+
+# Generated strategy results and downloaded SQLite data
+strategy/*/results/
+strategy/**/*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep pyproject.toml, uv.lock and .python-version in version control.

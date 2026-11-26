@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>策略回测</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #182f37; background: #f3f5f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px; }
+    main { max-width: 1150px; margin: auto; padding: 38px; background: white; border: 1px solid #dae3e5; border-radius: 12px; }
+    header { display: flex; justify-content: space-between; align-items: start; gap: 24px; }
+    h1 { font-size: 28px; margin: 0 0 12px; }
+    h2 { font-size: 19px; margin: 0; }
+    p { margin: 8px 0; }
+    .muted { color: #536774; font-size: 13px; line-height: 1.7; }
+    .capital { text-align: right; flex-shrink: 0; }
+    .capital strong { display: block; margin-top: 8px; font-size: 24px; font-variant-numeric: tabular-nums; }
+    section { margin-top: 28px; padding-top: 26px; border-top: 1px solid #dae3e5; }
+    .chart-heading { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .legend { display: flex; gap: 20px; font-size: 13px; }
+    .legend span::before { content: ""; display: inline-block; width: 23px; border-top: 3px solid; margin: 0 7px 3px 0; }
+    .strategy { color: #d12136; }
+    .reference { color: #365ba1; }
+    .plot { position: relative; margin-top: 14px; }
+    canvas { display: block; width: 100%; height: 400px; touch-action: pan-y; }
+    canvas:focus-visible { outline: 2px solid #365ba1; outline-offset: 4px; }
+    #tooltip { position: absolute; z-index: 1; pointer-events: none; padding: 12px 16px; background: #fff; border: 1px solid #c3cfd3; border-radius: 7px; box-shadow: 0 4px 18px #182f371a; font-size: 13px; white-space: nowrap; line-height: 1.9; }
+    #tooltip strong { display: block; }
+    #tooltip p { margin: 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; border-bottom: 1px solid #e6ecee; padding: 14px 4px; }
+    td { text-align: right; }
+    th { font-weight: 500; }
+    footer { margin-top: 26px; overflow-wrap: anywhere; }
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      main { padding: 20px 16px; }
+      header { flex-direction: column; gap: 8px; }
+      .capital { text-align: left; }
+      canvas { height: 330px; }
+    }
+    @media print { body { padding: 0; background: white; } main { border: 0; padding: 0; } #tooltip { display: none; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>策略回测</h1><p id="strategy-name"></p><p id="interval" class="muted"></p></div>
+    <div class="capital"><span class="muted">初始资金</span><strong id="capital"></strong></div>
+  </header>
+  <p id="metadata" class="muted"></p>
+  <section>
+    <div class="chart-heading"><h2>累计收益率</h2><div class="legend"><span class="strategy">策略</span><span class="reference" id="reference-name"></span></div></div>
+    <p class="muted" id="chart-help">悬停或触摸查看日期与收益率，也可聚焦图表后使用左右方向键。</p>
+    <div class="plot">
+      <canvas id="chart" tabindex="0" role="img" aria-label="策略与参考累计收益率对比图" aria-describedby="chart-help">累计收益率对比图，需要支持 Canvas 的浏览器。</canvas>
+      <div id="tooltip" hidden role="status" aria-live="polite"><strong id="point-date"></strong><p id="point-strategy" class="strategy"></p><p id="point-reference" class="reference"></p><p id="point-status" class="muted"></p></div>
+    </div>
+  </section>
+  <section><div class="chart-heading"><h2>期末指标</h2><span class="muted" id="final-date"></span></div><table aria-label="期末指标"><tbody id="metrics"></tbody></table></section>
+  <footer id="run-id" class="muted"></footer>
+</main>
+<script id="report-data" type="application/json">{{REPORT_DATA}}</script>
+<script>
+  "use strict";
+  const report = JSON.parse(document.getElementById("report-data").textContent);
+  const setText = (id, value) => { document.getElementById(id).textContent = value; };
+  const dateLabel = day => /^\d{8}$/.test(day) ? `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}` : day;
+  const decimal = (value, digits = 2) => Number(value).toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const percent = value => value === null ? "不可计算" : `${decimal(value * 100, 4)}%`;
+  const config = report.config;
+  setText("strategy-name", report.strategy);
+  setText("interval", `${dateLabel(config.start)} 至 ${dateLabel(config.end)}`);
+  setText("capital", `${decimal(config.initial_cash)} 元`);
+  const valuation = {suspension: "确认停牌沿用最近收盘价", last_close: "缺价沿用最近收盘价", strict: "严格当日收盘价"}[config.valuation];
+  const delisting = report.delistingZero ? "，退市归零" : "";
+  setText("metadata", `情境 ${report.scenario} · 参考 ${report.reference} · 价格 ${config.price_basis} · 股票池 当日事后确认 · 估值 ${valuation}${delisting}`);
+  setText("reference-name", report.reference);
+  setText("final-date", dateLabel(report.dates.at(-1)));
+  setText("run-id", report.runId);
+  document.title = `${report.strategy} · ${dateLabel(config.start)} 至 ${dateLabel(config.end)}`;
+  for (const [name, value, unit] of report.metrics) {
+    const row = document.createElement("tr");
+    const title = document.createElement("th");
+    title.scope = "row";
+    title.textContent = name;
+    const cell = document.createElement("td");
+    let display = "不可计算";
+    if (value !== null) {
+      const ratio = unit === "%" || unit === "百分点";
+      const digits = ["交易日", "笔", "股", "只"].includes(unit) ? 0 : (unit ? 2 : 4);
+      display = `${decimal(ratio ? value * 100 : value, digits)} ${unit}`.trim();
+    }
+    cell.textContent = display;
+    row.append(title, cell);
+    document.getElementById("metrics").append(row);
+  }
+
+  const canvas = document.getElementById("chart");
+  const context = canvas.getContext("2d");
+  const tooltip = document.getElementById("tooltip");
+  const colors = ["#d12136", "#365ba1"];
+  const finiteValues = report.series.flat().filter(value => value !== null);
+  const minimum = Math.min(...finiteValues);
+  const maximum = Math.max(...finiteValues);
+  const padding = Math.max((maximum - minimum) * 0.08, 0.001);
+  const low = minimum - padding;
+  const high = maximum + padding;
+  let width, height, left, right, plotTop, bottom;
+  let selected = null;
+  const x = index => left + (right - left) * index / (report.dates.length - 1);
+  const y = value => bottom - (bottom - plotTop) * (value - low) / (high - low);
+
+  function stroke(x1, y1, x2, y2, color, lineWidth = 1) {
+    context.strokeStyle = color;
+    context.lineWidth = lineWidth;
+    context.beginPath();
+    context.moveTo(x1, y1);
+    context.lineTo(x2, y2);
+    context.stroke();
+  }
+
+  function draw() {
+    context.clearRect(0, 0, width, height);
+    context.font = '12px Inter, "PingFang SC", sans-serif';
+    context.textAlign = "right";
+    context.fillStyle = "#536774";
+    for (let tick = 0; tick <= 4; tick++) {
+      const value = low + (high - low) * tick / 4;
+      stroke(left, y(value), right, y(value), "#e6ecee");
+      context.fillText(`${decimal(value * 100, 1)}%`, left - 9, y(value) + 4);
+    }
+    stroke(left, y(0), right, y(0), "#b7c5cb");
+    const intervals = width < 500 ? 2 : 4;
+    for (let tick = 0; tick <= intervals; tick++) {
+      const index = Math.round((report.dates.length - 1) * tick / intervals);
+      context.textAlign = tick === 0 ? "left" : (tick === intervals ? "right" : "center");
+      context.fillText(dateLabel(report.dates[index]), x(index), bottom + 25);
+    }
+    report.series.forEach((values, seriesIndex) => {
+      context.strokeStyle = colors[seriesIndex];
+      context.lineWidth = 2;
+      context.beginPath();
+      let connected = false;
+      values.forEach((value, index) => {
+        if (value === null) { connected = false; return; }
+        if (connected) context.lineTo(x(index), y(value));
+        else context.moveTo(x(index), y(value));
+        connected = true;
+      });
+      context.stroke();
+    });
+    if (selected !== null) {
+      stroke(x(selected), plotTop, x(selected), bottom, "#8b9fa7");
+      report.series.forEach((values, seriesIndex) => {
+        if (values[selected] === null) return;
+        context.beginPath();
+        context.arc(x(selected), y(values[selected]), 4, 0, 2 * Math.PI);
+        context.fillStyle = colors[seriesIndex];
+        context.fill();
+      });
+    }
+  }
+
+  function showPoint(index) {
+    selected = Math.max(0, Math.min(report.dates.length - 1, index));
+    setText("point-date", dateLabel(report.dates[selected]));
+    setText("point-strategy", `策略  ${percent(report.series[0][selected])}`);
+    setText("point-reference", `${report.reference}  ${percent(report.series[1][selected])}`);
+    setText("point-status", report.valuationStatus[selected] === "stale" ? "估值含沿用的历史收盘价" : "");
+    tooltip.hidden = false;
+    tooltip.style.left = `${Math.max(0, Math.min(width - tooltip.offsetWidth, x(selected) + 16))}px`;
+    tooltip.style.top = `${plotTop + 8}px`;
+    draw();
+  }
+
+  function clearPoint() { selected = null; tooltip.hidden = true; draw(); }
+
+  function resize() {
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    const scale = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    left = width < 500 ? 65 : 80;
+    right = width - 12;
+    plotTop = 16;
+    bottom = height - 40;
+    if (selected === null) draw();
+    else showPoint(selected);
+  }
+  function inspectPoint(event) {
+    const bounds = canvas.getBoundingClientRect();
+    const localX = event.clientX - bounds.left;
+    const localY = event.clientY - bounds.top;
+    if (localX < left || localX > right || localY < plotTop || localY > bottom) { clearPoint(); return; }
+    showPoint(Math.round((localX - left) / (right - left) * (report.dates.length - 1)));
+  }
+  canvas.addEventListener("pointermove", inspectPoint);
+  canvas.addEventListener("pointerdown", inspectPoint);
+  canvas.addEventListener("pointerleave", event => {
+    if (event.pointerType !== "touch") clearPoint();
+  });
+  canvas.addEventListener("focus", () => showPoint(selected ?? 0));
+  canvas.addEventListener("blur", clearPoint);
+  canvas.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    let index = selected ?? 0;
+    if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = report.dates.length - 1;
+    else index += event.key === "ArrowRight" ? 1 : -1;
+    showPoint(index);
+  });
+  new ResizeObserver(resize).observe(canvas);
+  resize();
+</script>
+</body>
+</html>

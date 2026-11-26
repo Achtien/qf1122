@@ -1,0 +1,31 @@
+[project]
+name = "tryout1122"
+version = "0.1.0"
+description = "A-share daily market data ingestion and strategy backtesting"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.5",
+    "pandas>=3.1.1",
+    "reportlab>=5.1.1",
+    "tushare>=1.4.29",
+    "tzdata>=2026.6",
+]
+
+# uv sync installs src/ in editable mode so imports work without PYTHONPATH.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["analyse", "backtest", "backtest.*", "get_data", "get_data.*"]
+exclude = ["backtest.tests", "backtest.tests.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+backtest = ["schema.sql", "report.html"]
+analyse = ["report.html"]
